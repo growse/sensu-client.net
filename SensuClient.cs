@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Dynamic;
 using System.IO;
@@ -27,7 +28,7 @@ namespace sensu_client.net
         private const string Configfile = "config.json";
         private const string Configdir = "conf.d";
         private static bool _safemode;
-        private static List<string> _checksInProgress = new List<string>();
+        private static readonly List<string> _checksInProgress = new List<string>();
         public static void Start()
         {
 
@@ -68,30 +69,24 @@ namespace sensu_client.net
         private static void Subscriptions()
         {
             Log.Debug("Subscribing to client subscriptions");
-            var connectionFactory = new ConnectionFactory
-               {
-                   HostName = _configsettings["rabbitmq"]["host"].ToString(),
-                   Port = int.Parse(_configsettings["rabbitmq"]["port"].ToString()),
-                   UserName = _configsettings["rabbitmq"]["user"].ToString(),
-                   Password = _configsettings["rabbitmq"]["password"].ToString(),
-                   VirtualHost = _configsettings["rabbitmq"]["vhost"].ToString()
-               };
-            using (var connection = connectionFactory.CreateConnection())
+
+            using (var ch = GetRabbitConnection().CreateModel())
             {
-                using (var ch = connection.CreateModel())
+                var q = ch.QueueDeclare("", false, false, true, null);
+                foreach (var subscription in _configsettings["client"]["subscriptions"])
                 {
-                    var q = ch.QueueDeclare("", false, false, true, null);
-                    foreach (var subscription in _configsettings["client"]["subscriptions"])
+                    Log.Debug("Binding queue {0} to exchange {1}", q.QueueName, subscription);
+                    ch.QueueBind(q.QueueName, subscription.ToString(), "");
+                }
+                var consumer = new QueueingBasicConsumer(ch);
+                ch.BasicConsume(q.QueueName, true, consumer);
+                while (true)
+                {
+                    object msg = null;
+                    consumer.Queue.Dequeue(100, out msg);
+                    if (msg != null)
                     {
-                        Log.Debug("Binding queue {0} to exchange {1}", q.QueueName, subscription);
-                        ch.QueueBind(q.QueueName, subscription.ToString(), "");
-                    }
-                    var consumer = new QueueingBasicConsumer(ch);
-                    ch.BasicConsume(q.QueueName, true, consumer);
-                    while (!_quitloop)
-                    {
-                        var msg = (BasicDeliverEventArgs)consumer.Queue.Dequeue();
-                        var payload = Encoding.UTF8.GetString(msg.Body);
+                        var payload = Encoding.UTF8.GetString(((BasicDeliverEventArgs)msg).Body);
                         try
                         {
                             var check = JObject.Parse(payload);
@@ -103,8 +98,24 @@ namespace sensu_client.net
                             Log.Error("Malformed Check: {0}", payload);
                         }
                     }
+                    //Lets us quit while we're still sleeping.
+                    lock (MonitorObject)
+                    {
+                        if (_quitloop)
+                        {
+                            Log.Warn("Quitloop set, exiting main loop");
+                            break;
+                        }
+                        Monitor.Wait(MonitorObject, KeepAliveTimeout);
+                        if (_quitloop)
+                        {
+                            Log.Warn("Quitloop set, exiting main loop");
+                            break;
+                        }
+                    }
                 }
             }
+
         }
 
         private static void ProcessCheck(JObject check)
@@ -141,7 +152,21 @@ namespace sensu_client.net
 
         private static void PublishResult(JObject check)
         {
-            throw new NotImplementedException();
+            var payload = new JObject();
+            payload["check"] = check;
+            payload["client"] = _configsettings["client"]["name"];
+            Log.Info("Publishing Check {0}", payload);
+            using (var ch = GetRabbitConnection().CreateModel())
+            {
+                var properties = new BasicProperties
+                {
+                    ContentType = "application/octet-stream",
+                    Priority = 0,
+                    DeliveryMode = 1
+                };
+                ch.BasicPublish("", "results", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
+            }
+            _checksInProgress.Remove(check["name"].ToString());
         }
 
         private static void ExecuteCheckCommand(JObject check)
@@ -154,11 +179,35 @@ namespace sensu_client.net
                 var command = SubstitueCommandTokens(check, out unmatchedTokens);
                 if (unmatchedTokens == null || unmatchedTokens.Count == 0)
                 {
-                    var processstartinfo = new ProcessStartInfo(command) {WindowStyle = ProcessWindowStyle.Hidden};
-                    var p = new Process {StartInfo = processstartinfo};
-                    p.WaitForExit();
-                    p.Start();
-
+                    var processstartinfo = new ProcessStartInfo(command)
+                        {
+                            WindowStyle = ProcessWindowStyle.Hidden,
+                            UseShellExecute = false,
+                            RedirectStandardError = true,
+                            RedirectStandardInput = true,
+                            RedirectStandardOutput = true
+                        };
+                    var process = new Process { StartInfo = processstartinfo };
+                    var stopwatch = new Stopwatch();
+                    try
+                    {
+                        stopwatch.Start();
+                        process.Start();
+                        if (!process.WaitForExit(1000 * int.Parse(check["timeout"].ToString())))
+                        {
+                            process.Kill();
+                        }
+                        check["output"] = string.Format("{0}{1}", process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd());
+                        check["status"] = process.ExitCode;
+                    }
+                    catch (Win32Exception ex)
+                    {
+                        check["output"] = string.Format("Unexpected error: {0}", ex.Message);
+                        check["status"] = 2;
+                    }
+                    stopwatch.Stop();
+                    check["duration"] = string.Format("{0:.000}", stopwatch.ElapsedMilliseconds / 1000);
+                    PublishResult(check);
                 }
                 else
                 {
@@ -202,6 +251,43 @@ namespace sensu_client.net
             return command;
         }
 
+        private static void KeepAliveScheduler()
+        {
+
+            using (var ch = GetRabbitConnection().CreateModel())
+            {
+                Log.Debug("Starting keepalive scheduler thread");
+                while (true)
+                {
+                    var payload = _configsettings["client"];
+                    payload["timestamp"] = Convert.ToInt64(Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds, MidpointRounding.AwayFromZero));
+                    Log.Debug("Publishing keepalive");
+                    var properties = new BasicProperties
+                        {
+                            ContentType = "application/octet-stream",
+                            Priority = 0,
+                            DeliveryMode = 1
+                        };
+                    ch.BasicPublish("", "keepalives", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
+
+                    //Lets us quit while we're still sleeping.
+                    lock (MonitorObject)
+                    {
+                        if (_quitloop)
+                        {
+                            Log.Warn("Quitloop set, exiting main loop");
+                            break;
+                        }
+                        Monitor.Wait(MonitorObject, KeepAliveTimeout);
+                        if (_quitloop)
+                        {
+                            Log.Warn("Quitloop set, exiting main loop");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         public static void Halt()
         {
             Log.Info("Told to stop. Obeying.");
@@ -225,56 +311,22 @@ namespace sensu_client.net
             }
             base.OnStop();
         }
-        private static void KeepAliveScheduler()
+        private static IConnection rabbitMqConnection = null;
+        private static IConnection GetRabbitConnection()
         {
-            var connectionFactory = new ConnectionFactory
-                {
-                    HostName = _configsettings["rabbitmq"]["host"].ToString(),
-                    Port = int.Parse(_configsettings["rabbitmq"]["port"].ToString()),
-                    UserName = _configsettings["rabbitmq"]["user"].ToString(),
-                    Password = _configsettings["rabbitmq"]["password"].ToString(),
-                    VirtualHost = _configsettings["rabbitmq"]["vhost"].ToString()
-                };
-            using (var connection = connectionFactory.CreateConnection())
+            if (rabbitMqConnection == null || !rabbitMqConnection.IsOpen)
             {
-                using (var ch = connection.CreateModel())
-                {
-                    Log.Debug("Starting keepalive scheduler thread");
-                    while (true)
+                var connectionFactory = new ConnectionFactory
                     {
-                        if (connection.IsOpen)
-                        {
-                            var payload = _configsettings["client"];
-                            payload["timestamp"] = Convert.ToInt64(Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds, MidpointRounding.AwayFromZero));
-                            Log.Debug("Publishing keepalive");
-                            var properties = new BasicProperties
-                                {
-                                    ContentType = "application/octet-stream",
-                                    Priority = 0,
-                                    DeliveryMode = 1
-                                };
-                            ch.BasicPublish("", "keepalives", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
-                        }
-                        //Lets us quit while we're still sleeping.
-                        lock (MonitorObject)
-                        {
-                            if (_quitloop)
-                            {
-                                Log.Warn("Quitloop set, exiting main loop");
-                                break;
-                            }
-                            Monitor.Wait(MonitorObject, KeepAliveTimeout);
-                            if (_quitloop)
-                            {
-                                Log.Warn("Quitloop set, exiting main loop");
-                                break;
-                            }
-                        }
-                    }
-                }
+                        HostName = _configsettings["rabbitmq"]["host"].ToString(),
+                        Port = int.Parse(_configsettings["rabbitmq"]["port"].ToString()),
+                        UserName = _configsettings["rabbitmq"]["user"].ToString(),
+                        Password = _configsettings["rabbitmq"]["password"].ToString(),
+                        VirtualHost = _configsettings["rabbitmq"]["vhost"].ToString()
+                    };
+                rabbitMqConnection = connectionFactory.CreateConnection();
             }
+            return rabbitMqConnection;
         }
-
-
     }
 }
