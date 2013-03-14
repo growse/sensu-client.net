@@ -10,6 +10,7 @@ using NLog;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Framing.v0_9_1;
 
 namespace sensu_client.net
@@ -17,7 +18,7 @@ namespace sensu_client.net
     class SensuClient : ServiceBase
     {
         private static readonly Logger Log = LogManager.GetCurrentClassLogger();
-        private const int KeepAliveTimeout = 2000;
+        private const int KeepAliveTimeout = 20000;
         private static readonly object MonitorObject = new object();
         private static bool _quitloop;
         private static JObject _configsettings;
@@ -48,6 +49,57 @@ namespace sensu_client.net
             //Start Keepalive thread
             var keepalivethread = new Thread(KeepAliveScheduler);
             keepalivethread.Start();
+
+            //Start subscriptions thread.
+            var subscriptionsthread = new Thread(Subscriptions);
+            subscriptionsthread.Start();
+        }
+
+        private static void Subscriptions()
+        {
+            Log.Debug("Subscribing to client subscriptions");
+            var connectionFactory = new ConnectionFactory
+               {
+                   HostName = _configsettings["rabbitmq"]["host"].ToString(),
+                   Port = int.Parse(_configsettings["rabbitmq"]["port"].ToString()),
+                   UserName = _configsettings["rabbitmq"]["user"].ToString(),
+                   Password = _configsettings["rabbitmq"]["password"].ToString(),
+                   VirtualHost = _configsettings["rabbitmq"]["vhost"].ToString()
+               };
+            using (var connection = connectionFactory.CreateConnection())
+            {
+                using (var ch = connection.CreateModel())
+                {
+                    var q = ch.QueueDeclare("", false, false, true, null);
+                    foreach (var subscription in _configsettings["client"]["subscriptions"])
+                    {
+                        Log.Debug("Binding queue {0} to exchange {1}", q.QueueName, subscription);
+                        ch.QueueBind(q.QueueName, subscription.ToString(), "");
+                    }
+                    var consumer = new QueueingBasicConsumer(ch);
+                    ch.BasicConsume(q.QueueName, true, consumer);
+                    while (!_quitloop)
+                    {
+                        var msg = (BasicDeliverEventArgs)consumer.Queue.Dequeue();
+                        var payload = Encoding.UTF8.GetString(msg.Body);
+                        try
+                        {
+                            var check = JObject.Parse(payload);
+                            Log.Debug("Received check request: {0}", check.ToString());
+                            ProcessCheck(check);
+                        }
+                        catch (JsonReaderException ex)
+                        {
+                            Log.Error("Malformed Check: {0}", payload);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void ProcessCheck(JObject check)
+        {
+            throw new NotImplementedException();
         }
 
         public static void Halt()
