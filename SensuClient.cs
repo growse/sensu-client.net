@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Dynamic;
 using System.IO;
 using System.Linq;
 using System.ServiceProcess;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using NLog;
 using Newtonsoft.Json;
@@ -24,7 +26,8 @@ namespace sensu_client.net
         private static JObject _configsettings;
         private const string Configfile = "config.json";
         private const string Configdir = "conf.d";
-        private static bool safemode;
+        private static bool _safemode;
+        private static List<string> _checksInProgress = new List<string>();
         public static void Start()
         {
 
@@ -46,7 +49,13 @@ namespace sensu_client.net
                     _configsettings.Add(thingemebob.Key, thingemebob.Value);
                 }
             }
-            bool.TryParse(_configsettings["client"]["safemode"].ToString(), out safemode);
+            try
+            {
+                bool.TryParse(_configsettings["client"]["safemode"].ToString(), out _safemode);
+            }
+            catch (NullReferenceException)
+            {
+            }
             //Start Keepalive thread
             var keepalivethread = new Thread(KeepAliveScheduler);
             keepalivethread.Start();
@@ -104,12 +113,15 @@ namespace sensu_client.net
             JToken command;
             if (check.TryGetValue("command", out command))
             {
-                if (_configsettings["check"].Contains(check["name"]))
+                if (_configsettings["check"] != null && _configsettings["check"].Contains(check["name"]))
                 {
-                    foreach (var thingie in _configsettings[])
+                    foreach (var thingie in _configsettings["checks"][check["name"]])
+                    {
+                        check.Add(thingie);
+                    }
                     ExecuteCheckCommand(check);
                 }
-                else if (safemode)
+                else if (_safemode)
                 {
                     check["output"] = "Check is not locally defined (safemode)";
                     check["status"] = 3;
@@ -134,12 +146,65 @@ namespace sensu_client.net
 
         private static void ExecuteCheckCommand(JObject check)
         {
-            throw new NotImplementedException();
+            Log.Debug("Attempting to execute check command {0}", check);
+            if (!_checksInProgress.Contains(check["name"].ToString()))
+            {
+                _checksInProgress.Add(check["name"].ToString());
+                List<string> unmatchedTokens;
+                var command = SubstitueCommandTokens(check, out unmatchedTokens);
+                if (unmatchedTokens == null || unmatchedTokens.Count == 0)
+                {
+                    var processstartinfo = new ProcessStartInfo(command) {WindowStyle = ProcessWindowStyle.Hidden};
+                    var p = new Process {StartInfo = processstartinfo};
+                    p.WaitForExit();
+                    p.Start();
+
+                }
+                else
+                {
+                    check["output"] = string.Format("Unmatched command tokens: {0}",
+                                                    string.Join(",", unmatchedTokens.ToArray()));
+                    check["status"] = 3;
+                    check["handle"] = false;
+                    PublishResult(check);
+                    _checksInProgress.Remove(check["name"].ToString());
+                }
+            }
+            else
+            {
+                Log.Warn("Previous check command execution in progress {0}", check["command"]);
+            }
+        }
+
+        private static string SubstitueCommandTokens(JObject check, out List<string> unmatchedTokens)
+        {
+            var temptokens = new List<string>();
+            var command = check["command"].ToString();
+            var blah = new Regex(":::(.*?):::", RegexOptions.Compiled);
+            command = blah.Replace(command, match =>
+                {
+                    var matched = "";
+                    foreach (var p in match.Value.Split('.'))
+                    {
+                        if (_configsettings["client"][p] != null)
+                        {
+                            matched += _configsettings["client"][p];
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                    if (string.IsNullOrEmpty(matched)) { temptokens.Add(match.Value); }
+                    return matched;
+                });
+            unmatchedTokens = temptokens;
+            return command;
         }
 
         public static void Halt()
         {
-            Log.Info("Told to stop.");
+            Log.Info("Told to stop. Obeying.");
             Environment.Exit(1);
         }
         protected override void OnStart(string[] args)
@@ -175,7 +240,7 @@ namespace sensu_client.net
                 using (var ch = connection.CreateModel())
                 {
                     Log.Debug("Starting keepalive scheduler thread");
-                    while (!_quitloop)
+                    while (true)
                     {
                         if (connection.IsOpen)
                         {
@@ -190,7 +255,21 @@ namespace sensu_client.net
                                 };
                             ch.BasicPublish("", "keepalives", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
                         }
-                        Thread.Sleep(KeepAliveTimeout);
+                        //Lets us quit while we're still sleeping.
+                        lock (MonitorObject)
+                        {
+                            if (_quitloop)
+                            {
+                                Log.Warn("Quitloop set, exiting main loop");
+                                break;
+                            }
+                            Monitor.Wait(MonitorObject, KeepAliveTimeout);
+                            if (_quitloop)
+                            {
+                                Log.Warn("Quitloop set, exiting main loop");
+                                break;
+                            }
+                        }
                     }
                 }
             }
