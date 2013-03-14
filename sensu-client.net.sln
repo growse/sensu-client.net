@@ -1,8 +1,6 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2012
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sensu-client.net", "sensu-client.net.csproj", "{35A7A16C-9F56-4C26-9521-D1F2EA2158F6}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".nuget", ".nuget", "{B991739C-7393-43B6-9D26-4360B6A0412F}"
 	ProjectSection(SolutionItems) = preProject
 		.nuget\NuGet.Config = .nuget\NuGet.Config
@@ -10,16 +8,18 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".nuget", ".nuget", "{B99173
 		.nuget\NuGet.targets = .nuget\NuGet.targets
 	EndProjectSection
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sensu-client.net", "sensu-client.net.csproj", "{4E2C3FE3-EC67-4C2B-9CF5-94EF6C9FFF6F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{35A7A16C-9F56-4C26-9521-D1F2EA2158F6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{35A7A16C-9F56-4C26-9521-D1F2EA2158F6}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{35A7A16C-9F56-4C26-9521-D1F2EA2158F6}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{35A7A16C-9F56-4C26-9521-D1F2EA2158F6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4E2C3FE3-EC67-4C2B-9CF5-94EF6C9FFF6F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4E2C3FE3-EC67-4C2B-9CF5-94EF6C9FFF6F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4E2C3FE3-EC67-4C2B-9CF5-94EF6C9FFF6F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4E2C3FE3-EC67-4C2B-9CF5-94EF6C9FFF6F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
