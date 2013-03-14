@@ -24,6 +24,7 @@ namespace sensu_client.net
         private static JObject _configsettings;
         private const string Configfile = "config.json";
         private const string Configdir = "conf.d";
+        private static bool safemode;
         public static void Start()
         {
 
@@ -45,7 +46,7 @@ namespace sensu_client.net
                     _configsettings.Add(thingemebob.Key, thingemebob.Value);
                 }
             }
-
+            bool.TryParse(_configsettings["client"]["safemode"].ToString(), out safemode);
             //Start Keepalive thread
             var keepalivethread = new Thread(KeepAliveScheduler);
             keepalivethread.Start();
@@ -98,6 +99,40 @@ namespace sensu_client.net
         }
 
         private static void ProcessCheck(JObject check)
+        {
+            Log.Debug("Processing check {0}", check.ToString());
+            JToken command;
+            if (check.TryGetValue("command", out command))
+            {
+                if (_configsettings["check"].Contains(check["name"]))
+                {
+                    foreach (var thingie in _configsettings[])
+                    ExecuteCheckCommand(check);
+                }
+                else if (safemode)
+                {
+                    check["output"] = "Check is not locally defined (safemode)";
+                    check["status"] = 3;
+                    check["handle"] = false;
+                    PublishResult(check);
+                }
+                else
+                {
+                    ExecuteCheckCommand(check);
+                }
+            }
+            else
+            {
+                Log.Warn("Unknown check exception: {0}", check);
+            }
+        }
+
+        private static void PublishResult(JObject check)
+        {
+            throw new NotImplementedException();
+        }
+
+        private static void ExecuteCheckCommand(JObject check)
         {
             throw new NotImplementedException();
         }
