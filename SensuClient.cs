@@ -206,7 +206,8 @@ namespace sensu_client.net
                         check["status"] = 2;
                     }
                     stopwatch.Stop();
-                    check["duration"] = string.Format("{0:.000}", stopwatch.ElapsedMilliseconds / 1000);
+
+                    check["duration"] = string.Format("{0:f3}", ((float)stopwatch.ElapsedMilliseconds) / 1000);
                     PublishResult(check);
                 }
                 else
