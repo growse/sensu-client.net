@@ -17,7 +17,7 @@ namespace sensu_client.net
     class SensuClient : ServiceBase
     {
         private static readonly Logger Log = LogManager.GetCurrentClassLogger();
-        private const int KeepAliveTimeout = 20000;
+        private const int KeepAliveTimeout = 2000;
         private static readonly object MonitorObject = new object();
         private static bool _quitloop;
         private static JObject _configsettings;
@@ -35,7 +35,7 @@ namespace sensu_client.net
             {
                 Log.ErrorException(string.Format("Config file not found: {0}", Configfile), ex);
             }
-            
+
             //Grab configs from dir.
             foreach (var settings in Directory.EnumerateFiles(Configdir).Select(file => JObject.Parse(File.ReadAllText(file))))
             {
@@ -75,7 +75,14 @@ namespace sensu_client.net
         }
         private static void KeepAliveScheduler()
         {
-            var connectionFactory = new ConnectionFactory { HostName = "gcslb01.amers1.ciscloud", Port = AmqpTcpEndpoint.UseDefaultPort };
+            var connectionFactory = new ConnectionFactory
+                {
+                    HostName = _configsettings["rabbitmq"]["host"].ToString(),
+                    Port = int.Parse(_configsettings["rabbitmq"]["port"].ToString()),
+                    UserName = _configsettings["rabbitmq"]["user"].ToString(),
+                    Password = _configsettings["rabbitmq"]["password"].ToString(),
+                    VirtualHost = _configsettings["rabbitmq"]["vhost"].ToString()
+                };
             using (var connection = connectionFactory.CreateConnection())
             {
                 using (var ch = connection.CreateModel())
@@ -85,11 +92,16 @@ namespace sensu_client.net
                     {
                         if (connection.IsOpen)
                         {
-                            var payload = _configsettings;
-                            payload["timestamp"] = (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds;
+                            var payload = _configsettings["client"];
+                            payload["timestamp"] = Convert.ToInt64(Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds, MidpointRounding.AwayFromZero));
                             Log.Debug("Publishing keepalive");
-                            var properties = new BasicProperties { ContentType = "application/json" };
-                            ch.BasicPublish("amq.direct", "keepalives", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
+                            var properties = new BasicProperties
+                                {
+                                    ContentType = "application/octet-stream",
+                                    Priority = 0,
+                                    DeliveryMode = 1
+                                };
+                            ch.BasicPublish("", "keepalives", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
                         }
                         Thread.Sleep(KeepAliveTimeout);
                     }
