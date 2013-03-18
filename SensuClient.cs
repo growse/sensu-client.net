@@ -28,7 +28,8 @@ namespace sensu_client.net
         private const string Configfile = "config.json";
         private const string Configdir = "conf.d";
         private static bool _safemode;
-        private static readonly List<string> _checksInProgress = new List<string>();
+        private static readonly List<string> ChecksInProgress = new List<string>();
+        private static readonly JsonSerializerSettings SerializerSettings = new JsonSerializerSettings { Formatting = Formatting.None };
         public static void Start()
         {
 
@@ -90,7 +91,7 @@ namespace sensu_client.net
                         try
                         {
                             var check = JObject.Parse(payload);
-                            Log.Debug("Received check request: {0}", check.ToString());
+                            Log.Debug("Received check request: {0}", JsonConvert.SerializeObject(check, SerializerSettings));
                             ProcessCheck(check);
                         }
                         catch (JsonReaderException ex)
@@ -120,7 +121,7 @@ namespace sensu_client.net
 
         private static void ProcessCheck(JObject check)
         {
-            Log.Debug("Processing check {0}", check.ToString());
+            Log.Debug("Processing check {0}", JsonConvert.SerializeObject(check, SerializerSettings));
             JToken command;
             if (check.TryGetValue("command", out command))
             {
@@ -155,7 +156,8 @@ namespace sensu_client.net
             var payload = new JObject();
             payload["check"] = check;
             payload["client"] = _configsettings["client"]["name"];
-            Log.Info("Publishing Check {0}", payload);
+
+            Log.Info("Publishing Check {0}", JsonConvert.SerializeObject(payload, SerializerSettings));
             using (var ch = GetRabbitConnection().CreateModel())
             {
                 var properties = new BasicProperties
@@ -166,15 +168,15 @@ namespace sensu_client.net
                 };
                 ch.BasicPublish("", "results", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
             }
-            _checksInProgress.Remove(check["name"].ToString());
+            ChecksInProgress.Remove(check["name"].ToString());
         }
 
         private static void ExecuteCheckCommand(JObject check)
         {
-            Log.Debug("Attempting to execute check command {0}", check);
-            if (!_checksInProgress.Contains(check["name"].ToString()))
+            Log.Debug("Attempting to execute check command {0}", JsonConvert.SerializeObject(check, SerializerSettings));
+            if (!ChecksInProgress.Contains(check["name"].ToString()))
             {
-                _checksInProgress.Add(check["name"].ToString());
+                ChecksInProgress.Add(check["name"].ToString());
                 List<string> unmatchedTokens;
                 var command = SubstitueCommandTokens(check, out unmatchedTokens);
                 if (unmatchedTokens == null || unmatchedTokens.Count == 0)
@@ -217,7 +219,7 @@ namespace sensu_client.net
                     check["status"] = 3;
                     check["handle"] = false;
                     PublishResult(check);
-                    _checksInProgress.Remove(check["name"].ToString());
+                    ChecksInProgress.Remove(check["name"].ToString());
                 }
             }
             else
