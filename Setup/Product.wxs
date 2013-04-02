@@ -44,7 +44,7 @@
            Interactive="no"
               >
         </ServiceInstall>
-        <ServiceControl Id="StartService" Start="install" Stop="both" Remove="uninstall" Name="sensu-client.net" Wait="yes" />
+        <ServiceControl Id="StartService" Start="install" Stop="both" Remove="uninstall" Name="sensu-client.net" Wait="no" />
       </Component>
       <Component Id="sensu_client.net.exe.config" Guid="203fe2d9-2e84-4026-9587-11f2f42de9a3">
         <File Source="$(var.sensu-client.net.TargetDir)\sensu-client.net.exe.config" Name="sensu-client.net.exe.config" />

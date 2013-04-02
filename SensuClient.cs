@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.ServiceProcess;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -25,31 +26,34 @@ namespace sensu_client.net
         private static readonly object MonitorObject = new object();
         private static bool _quitloop;
         private static JObject _configsettings;
-        private const string Configfile = "config.json";
-        private const string Configdir = "conf.d";
+        private const string Configfilename = "config.json";
+        private const string Configdirname = "conf.d";
         private static bool _safemode;
         private static readonly List<string> ChecksInProgress = new List<string>();
         private static readonly JsonSerializerSettings SerializerSettings = new JsonSerializerSettings { Formatting = Formatting.None };
         public static void Start()
         {
-
+            var configfile = string.Concat(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), Path.DirectorySeparatorChar,
+                                           Configfilename);
+            var configdir = string.Concat(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), Path.DirectorySeparatorChar,
+                                           Configdirname);
             //Read Config settings
             try
             {
-                _configsettings = JObject.Parse(File.ReadAllText(Configfile));
+                _configsettings = JObject.Parse(File.ReadAllText(configfile));
             }
             catch (FileNotFoundException ex)
             {
-                Log.ErrorException(string.Format("Config file not found: {0}", Configfile), ex);
-                _configsettings= new JObject();
+                Log.ErrorException(string.Format("Config file not found: {0}", configfile), ex);
+                _configsettings = new JObject();
             }
 
             //Grab configs from dir.
-            if (Directory.Exists(Configdir))
+            if (Directory.Exists(configdir))
             {
                 foreach (
                     var settings in
-                        Directory.EnumerateFiles(Configdir).Select(file => JObject.Parse(File.ReadAllText(file))))
+                        Directory.EnumerateFiles(configdir).Select(file => JObject.Parse(File.ReadAllText(file))))
                 {
                     foreach (var thingemebob in settings)
                     {
@@ -352,10 +356,10 @@ namespace sensu_client.net
             }
             base.OnStop();
         }
-        private static IConnection rabbitMqConnection = null;
+        private static IConnection _rabbitMqConnection;
         private static IConnection GetRabbitConnection()
         {
-            if (rabbitMqConnection == null || !rabbitMqConnection.IsOpen)
+            if (_rabbitMqConnection == null || !_rabbitMqConnection.IsOpen)
             {
                 if (_configsettings["rabbitmq"] == null)
                 {
@@ -372,7 +376,7 @@ namespace sensu_client.net
                     };
                 try
                 {
-                    rabbitMqConnection = connectionFactory.CreateConnection();
+                    _rabbitMqConnection = connectionFactory.CreateConnection();
                 }
                 catch (ConnectFailureException ex)
                 {
@@ -385,7 +389,7 @@ namespace sensu_client.net
                     return null;
                 }
             }
-            return rabbitMqConnection;
+            return _rabbitMqConnection;
         }
     }
 }
