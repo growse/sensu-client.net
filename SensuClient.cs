@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Dynamic;
 using System.IO;
 using System.Linq;
 using System.ServiceProcess;
@@ -70,20 +69,13 @@ namespace sensu_client.net
         private static void Subscriptions()
         {
             Log.Debug("Subscribing to client subscriptions");
-
-            using (var ch = GetRabbitConnection().CreateModel())
+            IModel ch = null;
+            QueueingBasicConsumer consumer = null;
+            while (true)
             {
-                var q = ch.QueueDeclare("", false, false, true, null);
-                foreach (var subscription in _configsettings["client"]["subscriptions"])
+                if (ch != null && ch.IsOpen && consumer.IsRunning)
                 {
-                    Log.Debug("Binding queue {0} to exchange {1}", q.QueueName, subscription);
-                    ch.QueueBind(q.QueueName, subscription.ToString(), "");
-                }
-                var consumer = new QueueingBasicConsumer(ch);
-                ch.BasicConsume(q.QueueName, true, consumer);
-                while (true)
-                {
-                    object msg = null;
+                    object msg;
                     consumer.Queue.Dequeue(100, out msg);
                     if (msg != null)
                     {
@@ -91,7 +83,8 @@ namespace sensu_client.net
                         try
                         {
                             var check = JObject.Parse(payload);
-                            Log.Debug("Received check request: {0}", JsonConvert.SerializeObject(check, SerializerSettings));
+                            Log.Debug("Received check request: {0}",
+                                      JsonConvert.SerializeObject(check, SerializerSettings));
                             ProcessCheck(check);
                         }
                         catch (JsonReaderException ex)
@@ -99,24 +92,36 @@ namespace sensu_client.net
                             Log.Error("Malformed Check: {0}", payload);
                         }
                     }
-                    //Lets us quit while we're still sleeping.
-                    lock (MonitorObject)
+                }
+                else
+                {
+                    Log.Error("rMQ Q is closed, Opening connection");
+                    ch = GetRabbitConnection().CreateModel();
+                    var q = ch.QueueDeclare("", false, false, true, null);
+                    foreach (var subscription in _configsettings["client"]["subscriptions"])
                     {
-                        if (_quitloop)
-                        {
-                            Log.Warn("Quitloop set, exiting main loop");
-                            break;
-                        }
-                        Monitor.Wait(MonitorObject, KeepAliveTimeout);
-                        if (_quitloop)
-                        {
-                            Log.Warn("Quitloop set, exiting main loop");
-                            break;
-                        }
+                        Log.Debug("Binding queue {0} to exchange {1}", q.QueueName, subscription);
+                        ch.QueueBind(q.QueueName, subscription.ToString(), "");
+                    }
+                    consumer = new QueueingBasicConsumer(ch);
+                    ch.BasicConsume(q.QueueName, true, consumer);
+                }
+                //Lets us quit while we're still sleeping.
+                lock (MonitorObject)
+                {
+                    if (_quitloop)
+                    {
+                        Log.Warn("Quitloop set, exiting main loop");
+                        break;
+                    }
+                    Monitor.Wait(MonitorObject, KeepAliveTimeout);
+                    if (_quitloop)
+                    {
+                        Log.Warn("Quitloop set, exiting main loop");
+                        break;
                     }
                 }
             }
-
         }
 
         private static void ProcessCheck(JObject check)
@@ -181,13 +186,15 @@ namespace sensu_client.net
                 var command = SubstitueCommandTokens(check, out unmatchedTokens);
                 if (unmatchedTokens == null || unmatchedTokens.Count == 0)
                 {
-                    var processstartinfo = new ProcessStartInfo(command)
+                    var parts = command.Split(" ".ToCharArray(), 2);
+                    var processstartinfo = new ProcessStartInfo(parts[0])
                         {
                             WindowStyle = ProcessWindowStyle.Hidden,
                             UseShellExecute = false,
                             RedirectStandardError = true,
                             RedirectStandardInput = true,
-                            RedirectStandardOutput = true
+                            RedirectStandardOutput = true,
+                            Arguments = parts[1]
                         };
                     var process = new Process { StartInfo = processstartinfo };
                     var stopwatch = new Stopwatch();
@@ -195,10 +202,18 @@ namespace sensu_client.net
                     {
                         stopwatch.Start();
                         process.Start();
-                        if (!process.WaitForExit(1000 * int.Parse(check["timeout"].ToString())))
+                        if (check["timeout"] != null)
                         {
-                            process.Kill();
+                            if (!process.WaitForExit(1000 * int.Parse(check["timeout"].ToString())))
+                            {
+                                process.Kill();
+                            }
                         }
+                        else
+                        {
+                            process.WaitForExit();
+                        }
+
                         check["output"] = string.Format("{0}{1}", process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd());
                         check["status"] = process.ExitCode;
                     }
@@ -256,40 +271,44 @@ namespace sensu_client.net
 
         private static void KeepAliveScheduler()
         {
-
-            using (var ch = GetRabbitConnection().CreateModel())
+            var ch = GetRabbitConnection().CreateModel();
+            Log.Debug("Starting keepalive scheduler thread");
+            while (true)
             {
-                Log.Debug("Starting keepalive scheduler thread");
-                while (true)
-                {
-                    var payload = _configsettings["client"];
-                    payload["timestamp"] = Convert.ToInt64(Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds, MidpointRounding.AwayFromZero));
-                    Log.Debug("Publishing keepalive");
-                    var properties = new BasicProperties
-                        {
-                            ContentType = "application/octet-stream",
-                            Priority = 0,
-                            DeliveryMode = 1
-                        };
-                    ch.BasicPublish("", "keepalives", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
-
-                    //Lets us quit while we're still sleeping.
-                    lock (MonitorObject)
+                var payload = _configsettings["client"];
+                payload["timestamp"] = Convert.ToInt64(Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds, MidpointRounding.AwayFromZero));
+                Log.Debug("Publishing keepalive");
+                var properties = new BasicProperties
                     {
-                        if (_quitloop)
-                        {
-                            Log.Warn("Quitloop set, exiting main loop");
-                            break;
-                        }
-                        Monitor.Wait(MonitorObject, KeepAliveTimeout);
-                        if (_quitloop)
-                        {
-                            Log.Warn("Quitloop set, exiting main loop");
-                            break;
-                        }
+                        ContentType = "application/octet-stream",
+                        Priority = 0,
+                        DeliveryMode = 1
+                    };
+                if (!ch.IsOpen)
+                {
+                    ch = GetRabbitConnection().CreateModel();
+                }
+                ch.BasicPublish("", "keepalives", properties,
+                                Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
+
+
+                //Lets us quit while we're still sleeping.
+                lock (MonitorObject)
+                {
+                    if (_quitloop)
+                    {
+                        Log.Warn("Quitloop set, exiting main loop");
+                        break;
+                    }
+                    Monitor.Wait(MonitorObject, KeepAliveTimeout);
+                    if (_quitloop)
+                    {
+                        Log.Warn("Quitloop set, exiting main loop");
+                        break;
                     }
                 }
             }
+
         }
         public static void Halt()
         {
