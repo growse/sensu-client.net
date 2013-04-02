@@ -1,0 +1,9 @@
+﻿{
+  "client": {
+    "name": "TESTCLIENT",
+    "address": "1.1.1.1",
+    "subscriptions": [
+      "windows"
+    ]
+  }
+}

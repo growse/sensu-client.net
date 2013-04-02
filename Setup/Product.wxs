@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:netfx="http://schemas.microsoft.com/wix/NetFxExtension" >
+  <Product Id="*" Name="sensu-client.net" Language="1033" Version="0.1.0.0" Manufacturer="Andrew Rowson" UpgradeCode="241c7c58-a726-44f9-ae7b-7e9928f68ef5">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
+    <PropertyRef Id="NETFRAMEWORK40CLIENT"/>
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Feature Id="ProductFeature" Title="sensu-client.net" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="plugins" />
+      <ComponentGroupRef Id="config" />
+    </Feature>
+    <Condition Message="This application requires .NET Framework 4.5. Please install the .NET Framework then run this installer again.">
+      <![CDATA[Installed OR NETFRAMEWORK40CLIENT]]>
+    </Condition>
+
+  </Product>
+
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLFOLDER" Name="sensu-client.net">
+          <Directory Id="pluginsdir" Name="plugins"></Directory>
+          <Directory Id="configdir" Name="conf.d"></Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+  </Fragment>
+  <Fragment>
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="sensuclient_service" Guid="977a70b5-5e85-4225-acda-403fa3a6b4ac">
+        <File Source="$(var.sensu-client.net.TargetPath)" />
+        <ServiceInstall
+           Id="ServiceInstaller"
+           Type="ownProcess"
+           Vital="yes"
+           Name="sensu-client.net"
+           DisplayName="Sensu Client.NET"
+           Description="Sensu Client"
+           Start="auto"
+           Account="LocalSystem"
+           ErrorControl="ignore"
+           Interactive="no"
+              >
+        </ServiceInstall>
+        <ServiceControl Id="StartService" Start="install" Stop="both" Remove="uninstall" Name="sensu-client.net" Wait="yes" />
+      </Component>
+      <Component Id="sensu_client.net.exe.config" Guid="203fe2d9-2e84-4026-9587-11f2f42de9a3">
+        <File Source="$(var.sensu-client.net.TargetDir)\sensu-client.net.exe.config" Name="sensu-client.net.exe.config" />
+
+      </Component>
+      <Component Id="NLog.dll" Guid="c0d45115-b6ce-442e-99e5-b5d07349da81">
+        <File Source="$(var.sensu-client.net.TargetDir)\NLog.dll" />
+      </Component>
+      <Component Id="NLog.config" Guid="5c74b4b0-5709-4e76-b99a-e312be11b58c">
+        <File Source="$(var.sensu-client.net.TargetDir)\NLog.config" />
+      </Component>
+
+      <Component Id="RabbitMQ.Client.dll" Guid="0cabcce4-9bd7-4435-b301-70a38efa4f59">
+        <File Source="$(var.sensu-client.net.TargetDir)\RabbitMQ.Client.dll" />
+      </Component>
+      <Component Id="Newtonsoft.Json.dll" Guid="f9a5f820-a239-4444-9029-e17058803b61">
+        <File Source="$(var.sensu-client.net.TargetDir)\Newtonsoft.Json.dll" />
+      </Component>
+      <Component Id="config.json" Guid="94750ef6-e2e4-449f-a335-0f44d34f2699">
+        <File Source="$(var.sensu-client.net.TargetDir)\config.json" />
+      </Component>
+    </ComponentGroup>
+    <ComponentGroup Id="plugins" Directory="pluginsdir">
+      <Component Id="check_service.ps1" Guid="84bbc263-4096-4090-b903-c7165efa11fc">
+        <File Source="$(var.sensu-client.net.TargetDir)\plugins\check_service.ps1" />
+      </Component>
+    </ComponentGroup>
+    <ComponentGroup Id="config" Directory="configdir">
+      <Component Id="client.json" Guid="32a86313-d315-42ac-aee0-b0fdc2f34b4f">
+        <File Source="$(var.sensu-client.net.TargetDir)\conf.d\client.json" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>

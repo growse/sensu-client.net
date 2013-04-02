@@ -13,6 +13,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMQ.Client.Exceptions;
 using RabbitMQ.Client.Framing.v0_9_1;
 
 namespace sensu_client.net
@@ -40,22 +41,32 @@ namespace sensu_client.net
             catch (FileNotFoundException ex)
             {
                 Log.ErrorException(string.Format("Config file not found: {0}", Configfile), ex);
+                _configsettings= new JObject();
             }
 
             //Grab configs from dir.
-            foreach (var settings in Directory.EnumerateFiles(Configdir).Select(file => JObject.Parse(File.ReadAllText(file))))
+            if (Directory.Exists(Configdir))
             {
-                foreach (var thingemebob in settings)
+                foreach (
+                    var settings in
+                        Directory.EnumerateFiles(Configdir).Select(file => JObject.Parse(File.ReadAllText(file))))
                 {
-                    _configsettings.Add(thingemebob.Key, thingemebob.Value);
+                    foreach (var thingemebob in settings)
+                    {
+                        _configsettings.Add(thingemebob.Key, thingemebob.Value);
+                    }
+                }
+                try
+                {
+                    bool.TryParse(_configsettings["client"]["safemode"].ToString(), out _safemode);
+                }
+                catch (NullReferenceException)
+                {
                 }
             }
-            try
+            else
             {
-                bool.TryParse(_configsettings["client"]["safemode"].ToString(), out _safemode);
-            }
-            catch (NullReferenceException)
-            {
+                Log.Warn("Config dir not found");
             }
             //Start Keepalive thread
             var keepalivethread = new Thread(KeepAliveScheduler);
@@ -96,7 +107,12 @@ namespace sensu_client.net
                 else
                 {
                     Log.Error("rMQ Q is closed, Opening connection");
-                    ch = GetRabbitConnection().CreateModel();
+                    var connection = GetRabbitConnection();
+                    if (connection == null)
+                    {
+                        return;
+                    }
+                    ch = connection.CreateModel();
                     var q = ch.QueueDeclare("", false, false, true, null);
                     foreach (var subscription in _configsettings["client"]["subscriptions"])
                     {
@@ -271,12 +287,16 @@ namespace sensu_client.net
 
         private static void KeepAliveScheduler()
         {
-            var ch = GetRabbitConnection().CreateModel();
+            var connection = GetRabbitConnection();
+            if (connection == null) return;
+            var ch = connection.CreateModel();
             Log.Debug("Starting keepalive scheduler thread");
             while (true)
             {
                 var payload = _configsettings["client"];
-                payload["timestamp"] = Convert.ToInt64(Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds, MidpointRounding.AwayFromZero));
+                payload["timestamp"] =
+                    Convert.ToInt64(Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds,
+                                               MidpointRounding.AwayFromZero));
                 Log.Debug("Publishing keepalive");
                 var properties = new BasicProperties
                     {
@@ -308,7 +328,6 @@ namespace sensu_client.net
                     }
                 }
             }
-
         }
         public static void Halt()
         {
@@ -338,6 +357,11 @@ namespace sensu_client.net
         {
             if (rabbitMqConnection == null || !rabbitMqConnection.IsOpen)
             {
+                if (_configsettings["rabbitmq"] == null)
+                {
+                    Log.Error("rabbitmq not configured");
+                    return null;
+                }
                 var connectionFactory = new ConnectionFactory
                     {
                         HostName = _configsettings["rabbitmq"]["host"].ToString(),
@@ -346,7 +370,20 @@ namespace sensu_client.net
                         Password = _configsettings["rabbitmq"]["password"].ToString(),
                         VirtualHost = _configsettings["rabbitmq"]["vhost"].ToString()
                     };
-                rabbitMqConnection = connectionFactory.CreateConnection();
+                try
+                {
+                    rabbitMqConnection = connectionFactory.CreateConnection();
+                }
+                catch (ConnectFailureException ex)
+                {
+                    Log.ErrorException("unable to open rMQ connection", ex);
+                    return null;
+                }
+                catch (BrokerUnreachableException ex)
+                {
+                    Log.ErrorException("rMQ endpoint unreachable", ex);
+                    return null;
+                }
             }
             return rabbitMqConnection;
         }
