@@ -102,7 +102,7 @@ namespace sensu_client.net
                                       JsonConvert.SerializeObject(check, SerializerSettings));
                             ProcessCheck(check);
                         }
-                        catch (JsonReaderException ex)
+                        catch (JsonReaderException)
                         {
                             Log.Error("Malformed Check: {0}", payload);
                         }
@@ -310,11 +310,18 @@ namespace sensu_client.net
                     };
                 if (!ch.IsOpen)
                 {
+                    connection = GetRabbitConnection();
+                    if (connection == null)
+                    {
+                        Log.Error("RabbitConnection was null. Not publishing keepalive.");
+                    }
                     ch = GetRabbitConnection().CreateModel();
-                }
-                ch.BasicPublish("", "keepalives", properties,
-                                Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
 
+                }
+                else
+                {
+                    ch.BasicPublish("", "keepalives", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
+                }
 
                 //Lets us quit while we're still sleeping.
                 lock (MonitorObject)
