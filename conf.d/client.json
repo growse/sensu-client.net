@@ -1,9 +1,8 @@
 ﻿{
   "client": {
-    "name": "TESTCLIENT",
-    "address": "1.1.1.1",
+    "name": "sensu-client default",
+    "address": "",
     "subscriptions": [
-      "windows"
     ]
   }
 }
