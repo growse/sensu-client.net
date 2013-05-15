@@ -114,17 +114,20 @@ namespace sensu_client.net
                     var connection = GetRabbitConnection();
                     if (connection == null)
                     {
-                        return;
+                        //Do nothing - we'll loop around the while loop again with everything null and retry the connection.
                     }
-                    ch = connection.CreateModel();
-                    var q = ch.QueueDeclare("", false, false, true, null);
-                    foreach (var subscription in _configsettings["client"]["subscriptions"])
+                    else
                     {
-                        Log.Debug("Binding queue {0} to exchange {1}", q.QueueName, subscription);
-                        ch.QueueBind(q.QueueName, subscription.ToString(), "");
+                        ch = connection.CreateModel();
+                        var q = ch.QueueDeclare("", false, false, true, null);
+                        foreach (var subscription in _configsettings["client"]["subscriptions"])
+                        {
+                            Log.Debug("Binding queue {0} to exchange {1}", q.QueueName, subscription);
+                            ch.QueueBind(q.QueueName, subscription.ToString(), "");
+                        }
+                        consumer = new QueueingBasicConsumer(ch);
+                        ch.BasicConsume(q.QueueName, true, consumer);
                     }
-                    consumer = new QueueingBasicConsumer(ch);
-                    ch.BasicConsume(q.QueueName, true, consumer);
                 }
                 //Lets us quit while we're still sleeping.
                 lock (MonitorObject)
