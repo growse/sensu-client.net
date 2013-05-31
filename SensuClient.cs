@@ -81,6 +81,66 @@ namespace sensu_client.net
             subscriptionsthread.Start();
         }
 
+        private static void KeepAliveScheduler()
+        {
+            IModel ch = null;
+            Log.Debug("Starting keepalive scheduler thread");
+            while (true)
+            {
+                if (ch == null || !ch.IsOpen)
+                {
+                    Log.Error("rMQ Q is closed, Getting connection");
+                    var connection = GetRabbitConnection();
+                    if (connection == null)
+                    {
+                        //Do nothing - we'll loop around the while loop again with everything null and retry the connection.
+                    }
+                    else
+                    {
+                        ch = connection.CreateModel();
+                    }
+                }
+                if (ch != null && ch.IsOpen)
+                {
+                    //Valid channel. Good to publish.
+                    var payload = _configsettings["client"];
+                    payload["timestamp"] =
+                        Convert.ToInt64(
+                            Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds,
+                                       MidpointRounding.AwayFromZero));
+                    Log.Debug("Publishing keepalive");
+                    var properties = new BasicProperties
+                        {
+                            ContentType = "application/octet-stream",
+                            Priority = 0,
+                            DeliveryMode = 1
+                        };
+                    ch.BasicPublish("", "keepalives", properties,
+                                    Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
+                }
+                else
+                {
+                    Log.Error("Valiant attempts to get a valid rMQ connection were in vain. Skipping this keepalive loop.");
+                }
+
+                //Lets us quit while we're still sleeping.
+                lock (MonitorObject)
+                {
+                    if (_quitloop)
+                    {
+                        Log.Warn("Quitloop set, exiting main loop");
+                        break;
+                    }
+                    Monitor.Wait(MonitorObject, KeepAliveTimeout);
+                    if (_quitloop)
+                    {
+                        Log.Warn("Quitloop set, exiting main loop");
+                        break;
+                    }
+                }
+            }
+        }
+
         private static void Subscriptions()
         {
             Log.Debug("Subscribing to client subscriptions");
@@ -110,7 +170,7 @@ namespace sensu_client.net
                 }
                 else
                 {
-                    Log.Error("rMQ Q is closed, Opening connection");
+                    Log.Error("rMQ Q is closed, Getting connection");
                     var connection = GetRabbitConnection();
                     if (connection == null)
                     {
@@ -292,57 +352,7 @@ namespace sensu_client.net
             return command;
         }
 
-        private static void KeepAliveScheduler()
-        {
-            var connection = GetRabbitConnection();
-            if (connection == null) return;
-            var ch = connection.CreateModel();
-            Log.Debug("Starting keepalive scheduler thread");
-            while (true)
-            {
-                var payload = _configsettings["client"];
-                payload["timestamp"] =
-                    Convert.ToInt64(Math.Round((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0)).TotalSeconds,
-                                               MidpointRounding.AwayFromZero));
-                Log.Debug("Publishing keepalive");
-                var properties = new BasicProperties
-                    {
-                        ContentType = "application/octet-stream",
-                        Priority = 0,
-                        DeliveryMode = 1
-                    };
-                if (!ch.IsOpen)
-                {
-                    connection = GetRabbitConnection();
-                    if (connection == null)
-                    {
-                        Log.Error("RabbitConnection was null. Not publishing keepalive.");
-                    }
-                    ch = GetRabbitConnection().CreateModel();
 
-                }
-                else
-                {
-                    ch.BasicPublish("", "keepalives", properties, Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(payload)));
-                }
-
-                //Lets us quit while we're still sleeping.
-                lock (MonitorObject)
-                {
-                    if (_quitloop)
-                    {
-                        Log.Warn("Quitloop set, exiting main loop");
-                        break;
-                    }
-                    Monitor.Wait(MonitorObject, KeepAliveTimeout);
-                    if (_quitloop)
-                    {
-                        Log.Warn("Quitloop set, exiting main loop");
-                        break;
-                    }
-                }
-            }
-        }
         public static void Halt()
         {
             Log.Info("Told to stop. Obeying.");
@@ -367,36 +377,44 @@ namespace sensu_client.net
             base.OnStop();
         }
         private static IConnection _rabbitMqConnection;
+        private static readonly object _connectionlock = new object();
         private static IConnection GetRabbitConnection()
         {
-            if (_rabbitMqConnection == null || !_rabbitMqConnection.IsOpen)
+            //One at a time, please
+            lock (_connectionlock)
             {
-                if (_configsettings["rabbitmq"] == null)
+                if (_rabbitMqConnection == null || !_rabbitMqConnection.IsOpen)
                 {
-                    Log.Error("rabbitmq not configured");
-                    return null;
-                }
-                var connectionFactory = new ConnectionFactory
+                    Log.Debug("No open rMQ connection available. Creating new one.");
+
+                    if (_configsettings["rabbitmq"] == null)
                     {
-                        HostName = _configsettings["rabbitmq"]["host"].ToString(),
-                        Port = int.Parse(_configsettings["rabbitmq"]["port"].ToString()),
-                        UserName = _configsettings["rabbitmq"]["user"].ToString(),
-                        Password = _configsettings["rabbitmq"]["password"].ToString(),
-                        VirtualHost = _configsettings["rabbitmq"]["vhost"].ToString()
-                    };
-                try
-                {
-                    _rabbitMqConnection = connectionFactory.CreateConnection();
-                }
-                catch (ConnectFailureException ex)
-                {
-                    Log.ErrorException("unable to open rMQ connection", ex);
-                    return null;
-                }
-                catch (BrokerUnreachableException ex)
-                {
-                    Log.ErrorException("rMQ endpoint unreachable", ex);
-                    return null;
+                        Log.Error("rabbitmq not configured");
+                        return null;
+                    }
+
+                    var connectionFactory = new ConnectionFactory
+                        {
+                            HostName = _configsettings["rabbitmq"]["host"].ToString(),
+                            Port = int.Parse(_configsettings["rabbitmq"]["port"].ToString()),
+                            UserName = _configsettings["rabbitmq"]["user"].ToString(),
+                            Password = _configsettings["rabbitmq"]["password"].ToString(),
+                            VirtualHost = _configsettings["rabbitmq"]["vhost"].ToString()
+                        };
+                    try
+                    {
+                        _rabbitMqConnection = connectionFactory.CreateConnection();
+                    }
+                    catch (ConnectFailureException ex)
+                    {
+                        Log.ErrorException("unable to open rMQ connection", ex);
+                        return null;
+                    }
+                    catch (BrokerUnreachableException ex)
+                    {
+                        Log.ErrorException("rMQ endpoint unreachable", ex);
+                        return null;
+                    }
                 }
             }
             return _rabbitMqConnection;
