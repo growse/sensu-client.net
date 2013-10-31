@@ -6,7 +6,7 @@ An implementation of the sensu client in .NET for those that don't want to drag 
 Installation
 ============
 
-The MSI will install a service called 'Sensu Client.net' and application into %PROGRAM FILES%. It provides a sample sensu-compatible json-based config file in the installation directory. Sensu-client.net will then log to %PROGRAMDATA%\sensu-client.net\logs.
+The MSI will install a service called 'Sensu Client.net' and application into `%PROGRAMFILES%`. It provides a sample sensu-compatible json-based config file in the installation directory. Sensu-client.net will then log to `%PROGRAMDATA%\sensu-client.net\logs`.
 
 Download
 ========
