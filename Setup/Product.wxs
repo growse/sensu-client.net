@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:netfx="http://schemas.microsoft.com/wix/NetFxExtension"  xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
-  <Product Id="*" Name="sensu-client.net" Language="1033" Version="0.1.4.0" Manufacturer="Andrew Rowson" UpgradeCode="241c7c58-a726-44f9-ae7b-7e9928f68ef5">
+  <Product Id="*" Name="sensu-client.net" Language="1033" Version="0.1.5.0" Manufacturer="Andrew Rowson" UpgradeCode="241c7c58-a726-44f9-ae7b-7e9928f68ef5">
     <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
     <PropertyRef Id="NETFRAMEWORK40CLIENT"/>
     <Upgrade Id="241c7c58-a726-44f9-ae7b-7e9928f68ef5">
       <UpgradeVersion
-      Minimum="0.1.0.0" Maximum="0.1.4.0"
+      Minimum="0.1.0.0" Maximum="0.1.5.0"
       Property="PREVIOUSVERSIONSINSTALLED"
       IncludeMinimum="yes" IncludeMaximum="no" />
     </Upgrade>

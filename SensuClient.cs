@@ -19,7 +19,7 @@ using RabbitMQ.Client.Framing.v0_9_1;
 
 namespace sensu_client.net
 {
-    class SensuClient : ServiceBase
+    public class SensuClient : ServiceBase
     {
         private static readonly Logger Log = LogManager.GetCurrentClassLogger();
         private const int KeepAliveTimeout = 20000;
@@ -33,10 +33,26 @@ namespace sensu_client.net
         private static readonly JsonSerializerSettings SerializerSettings = new JsonSerializerSettings { Formatting = Formatting.None };
         public static void Start()
         {
-            var configfile = string.Concat(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), Path.DirectorySeparatorChar,
-                                           Configfilename);
-            var configdir = string.Concat(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), Path.DirectorySeparatorChar,
-                                           Configdirname);
+            LoadConfiguration();
+
+            
+            //Start Keepalive thread
+            var keepalivethread = new Thread(KeepAliveScheduler);
+            keepalivethread.Start();
+
+            //Start subscriptions thread.
+            var subscriptionsthread = new Thread(Subscriptions);
+            subscriptionsthread.Start();
+        }
+
+        public static void LoadConfiguration()
+        {
+            var configfile = string.Concat(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                Path.DirectorySeparatorChar,
+                Configfilename);
+            var configdir = string.Concat(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                Path.DirectorySeparatorChar,
+                Configdirname);
             //Read Config settings
             try
             {
@@ -47,7 +63,6 @@ namespace sensu_client.net
                 Log.ErrorException(string.Format("Config file not found: {0}", configfile), ex);
                 _configsettings = new JObject();
             }
-
             //Grab configs from dir.
             if (Directory.Exists(configdir))
             {
@@ -72,13 +87,6 @@ namespace sensu_client.net
             {
                 Log.Warn("Config dir not found");
             }
-            //Start Keepalive thread
-            var keepalivethread = new Thread(KeepAliveScheduler);
-            keepalivethread.Start();
-
-            //Start subscriptions thread.
-            var subscriptionsthread = new Thread(Subscriptions);
-            subscriptionsthread.Start();
         }
 
         private static void KeepAliveScheduler()
@@ -207,7 +215,7 @@ namespace sensu_client.net
             }
         }
 
-        private static void ProcessCheck(JObject check)
+        public static void ProcessCheck(JObject check)
         {
             Log.Debug("Processing check {0}", JsonConvert.SerializeObject(check, SerializerSettings));
             JToken command;
@@ -259,25 +267,46 @@ namespace sensu_client.net
             ChecksInProgress.Remove(check["name"].ToString());
         }
 
-        private static void ExecuteCheckCommand(JObject check)
+        public static void ExecuteCheckCommand(JObject check)
         {
             Log.Debug("Attempting to execute check command {0}", JsonConvert.SerializeObject(check, SerializerSettings));
+            if (check["name"] == null)
+            {
+                check["output"] = "Check didn't have a valid name";
+                check["status"] = 3;
+                check["handle"] = false;
+                PublishResult(check);
+                return;
+            }
             if (!ChecksInProgress.Contains(check["name"].ToString()))
             {
                 ChecksInProgress.Add(check["name"].ToString());
                 List<string> unmatchedTokens;
                 var command = SubstitueCommandTokens(check, out unmatchedTokens);
+                command = command.Trim();
                 if (unmatchedTokens == null || unmatchedTokens.Count == 0)
                 {
-                    var parts = command.Split(" ".ToCharArray(), 2);
-                    var processstartinfo = new ProcessStartInfo(parts[0])
+                    var checkCommand = "";
+                    var checkArgs = "";
+                    if (command.Contains(" "))
+                    {
+                        var parts = command.Split(" ".ToCharArray(), 2);
+                        checkCommand = parts[0];
+                        checkArgs = parts[1];
+                    }
+                    else
+                    {
+                        checkCommand = command;
+                    }
+                   
+                    var processstartinfo = new ProcessStartInfo(checkCommand)
                         {
                             WindowStyle = ProcessWindowStyle.Hidden,
                             UseShellExecute = false,
                             RedirectStandardError = true,
                             RedirectStandardInput = true,
                             RedirectStandardOutput = true,
-                            Arguments = parts[1]
+                            Arguments = checkArgs
                         };
                     var process = new Process { StartInfo = processstartinfo };
                     var stopwatch = new Stopwatch();
@@ -377,11 +406,11 @@ namespace sensu_client.net
             base.OnStop();
         }
         private static IConnection _rabbitMqConnection;
-        private static readonly object _connectionlock = new object();
+        private static readonly object Connectionlock = new object();
         private static IConnection GetRabbitConnection()
         {
             //One at a time, please
-            lock (_connectionlock)
+            lock (Connectionlock)
             {
                 if (_rabbitMqConnection == null || !_rabbitMqConnection.IsOpen)
                 {
