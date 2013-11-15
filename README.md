@@ -13,4 +13,4 @@ Download
 
 Current version 0.1.5:
 
-https://s3-eu-west-1.amazonaws.com/sensuclientdotnet/sensu-client.net.0.1.5.msi
+https://github.com/growse/sensu-client.net/releases/download/v0.1.5/sensu-client.net.0.1.5.msi
